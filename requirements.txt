@@ -4,3 +4,5 @@ matplotlib==3.10.8
 seaborn==0.13.2
 plotly==6.6.0
 jupyter==1.1.1
+dash==2.18.2
+dash-bootstrap-components==1.6.0
