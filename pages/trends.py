@@ -55,6 +55,7 @@ layout = dbc.Container(
                                     id="trends-year-slider",
                                     min=YEAR_MIN,
                                     max=YEAR_MAX,
+                                    pushable=1,
                                     step=1,
                                     value=[YEAR_MIN, YEAR_MAX],
                                     marks={y: str(y) for y in range(YEAR_MIN, YEAR_MAX + 1)},
@@ -263,10 +264,9 @@ def _filter_years(year_range):
     Output("trends-kpi-peak-year",    "children"),
     Output("trends-kpi-first-year",   "children"),
     Output("trends-kpi-price-change", "children"),
-    Input("trends-year-slider",   "value"),
-    Input("trends-city-dropdown", "value"),
+    Input("trends-year-slider", "value"),
 )
-def update_kpis(year_range, _cities):
+def update_kpis(year_range):
     d = _filter_years(year_range)
     if d.empty:
         return "0", "N/A", "N/A", "N/A"
@@ -308,6 +308,7 @@ def update_listings_line(year_range, agg):
             .size()
             .reset_index(name="listings")
         )
+        by_time["listing_month"] = by_time["listing_month"].astype(int)
         by_time["period"] = (
             by_time["listing_year"].astype(str)
             + "-"
@@ -356,6 +357,8 @@ def update_price_line(year_range, agg):
             .median()
             .reset_index()
         )
+        by_time = by_time.rename(columns={"average_rate_per_night": "median_price"})
+        by_time["listing_month"] = by_time["listing_month"].astype(int)
         by_time["period"] = (
             by_time["listing_year"].astype(str)
             + "-"
@@ -383,6 +386,9 @@ def update_price_line(year_range, agg):
     return fig
 
 
+MAX_CITIES = 10
+
+
 @callback(
     Output("trends-city-line", "figure"),
     Input("trends-year-slider",   "value"),
@@ -392,13 +398,30 @@ def update_city_line(year_range, city_list):
     d = _filter_years(year_range)
     if not city_list:
         city_list = TOP10_CITIES[:5]
+
+    # Cap at MAX_CITIES — pick the ones with the most listings
+    was_capped = False
+    if len(city_list) > MAX_CITIES:
+        top = (
+            d[d["city"].isin(city_list)]
+            .groupby("city")
+            .size()
+            .nlargest(MAX_CITIES)
+            .index.tolist()
+        )
+        city_list = top
+        was_capped = True
+
     d = d[d["city"].isin(city_list)]
     if d.empty:
         return px.line(title="No data for the selected cities", template="plotly_white")
+
     by_city_year = (
         d.groupby(["listing_year", "city"]).size().reset_index(name="listings")
     )
     by_city_year["listing_year"] = by_city_year["listing_year"].astype(str)
+
+    title = f"Showing top {MAX_CITIES} cities by listing count" if was_capped else None
     fig = px.line(
         by_city_year,
         x="listing_year",
@@ -407,10 +430,11 @@ def update_city_line(year_range, city_list):
         markers=True,
         labels={"listing_year": "Year", "listings": "Listings", "city": "City"},
         template="plotly_white",
+        title=title,
     )
     fig.update_traces(line_width=2, marker_size=5)
     fig.update_layout(
-        margin=dict(t=10, b=50, l=50, r=10),
+        margin=dict(t=30 if title else 10, b=50, l=50, r=10),
         xaxis_tickangle=-35,
         yaxis_title="Number of Listings",
         xaxis_title="Year",
@@ -440,6 +464,7 @@ def update_heatmap(year_range):
             y=[str(y) for y in pivot.index],
             colorscale="YlOrRd",
             hovertemplate="Year: %{y}<br>Month: %{x}<br>Listings: %{z}<extra></extra>",
+            colorbar=dict(title="Listings"),
         )
     )
     fig.update_layout(
@@ -447,6 +472,5 @@ def update_heatmap(year_range):
         xaxis_title="Month",
         yaxis_title="Year",
         plot_bgcolor="white",
-        coloraxis_colorbar=dict(title="Listings"),
     )
     return fig

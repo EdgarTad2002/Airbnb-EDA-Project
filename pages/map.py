@@ -1,9 +1,26 @@
 import dash
 import dash_bootstrap_components as dbc
 import plotly.express as px
+import plotly.graph_objects as go
 from dash import Input, Output, callback, dcc, html
 
 from data_loader import load_data
+
+# Major Texas cities for the label overlay
+TX_CITIES = {
+    "Houston":        (29.760, -95.370),
+    "San Antonio":    (29.425, -98.494),
+    "Dallas":         (32.783, -96.800),
+    "Austin":         (30.267, -97.743),
+    "Fort Worth":     (32.755, -97.333),
+    "El Paso":        (31.761, -106.485),
+    "Corpus Christi": (27.801, -97.396),
+    "Lubbock":        (33.578, -101.856),
+    "Amarillo":       (35.221, -101.831),
+    "Waco":           (31.549, -97.147),
+    "Laredo":         (27.506, -99.507),
+    "Galveston":      (29.301, -94.797),
+}
 
 dash.register_page(__name__, path="/map", name="Map", title="Map Explorer")
 
@@ -183,10 +200,14 @@ layout = dbc.Container(
                                 "Pan and zoom to explore.",
                                 className="text-muted small",
                             ),
-                            dcc.Graph(
-                                id="map-scatter",
-                                config={"displayModeBar": True, "scrollZoom": True},
-                                style={"height": "520px"},
+                            dcc.Loading(
+                                dcc.Graph(
+                                    id="map-scatter",
+                                    config={"displayModeBar": True, "scrollZoom": True},
+                                    style={"height": "500px", "width": "100%"},
+                                ),
+                                type="circle",
+                                color="#2563eb",
                             ),
                         ]
                     ),
@@ -255,6 +276,36 @@ def update_kpis(price_range, bedroom_max, city_list, _color):
     )
 
 
+GEO_STYLE = dict(
+    visible=True,
+    resolution=50,
+    projection_type="mercator",
+    showcountries=True,   countrycolor="#adb5bd",
+    showcoastlines=True,  coastlinecolor="#adb5bd",
+    showland=True,        landcolor="#f1f3f5",
+    showocean=True,       oceancolor="#cfe2ff",
+    showlakes=True,       lakecolor="#cfe2ff",
+    showrivers=True,      rivercolor="#cfe2ff",
+    showsubunits=True,    subunitcolor="#ced4da",
+    subunitwidth=1,
+    lataxis=dict(range=[25.5, 36.8]),
+    lonaxis=dict(range=[-107.5, -93.0]),
+)
+
+_city_label_trace = go.Scattergeo(
+    lat=[v[0] for v in TX_CITIES.values()],
+    lon=[v[1] for v in TX_CITIES.values()],
+    text=list(TX_CITIES.keys()),
+    mode="markers+text",
+    textposition="top center",
+    textfont=dict(size=10, color="#343a40", family="Arial"),
+    marker=dict(size=5, color="#495057", symbol="circle"),
+    hoverinfo="skip",
+    showlegend=False,
+    name="",
+)
+
+
 @callback(
     Output("map-scatter", "figure"),
     Input("map-price-slider",   "value"),
@@ -264,42 +315,53 @@ def update_kpis(price_range, bedroom_max, city_list, _color):
 )
 def update_map(price_range, bedroom_max, city_list, color_col):
     d = _filter(price_range, bedroom_max, city_list)
-    if d.empty:
-        fig = px.scatter_map(lat=[], lon=[], zoom=6)
-        fig.update_layout(map_style="open-street-map")
-        return fig
-
-    sample = d.sample(min(len(d), 3000), random_state=42)
 
     color_label = "Nightly Price ($)" if color_col == "average_rate_per_night" else "Bedrooms"
-    hover_data = {
-        "city": True,
-        "average_rate_per_night": ":$,.0f",
-        "bedrooms_count": True,
-        #color_col: False,
-    }
 
-    fig = px.scatter_map(
-        sample,
-        lat="latitude",
-        lon="longitude",
-        color=color_col,
-        color_continuous_scale="Plasma",
-        size_max=8,
-        zoom=5,
-        center={"lat": 31.0, "lon": -99.0},
-        hover_name="city",
-        hover_data=hover_data,
-        labels={
-            "average_rate_per_night": "Nightly Price ($)",
-            "bedrooms_count": "Bedrooms",
-        },
-        opacity=0.75,
+    if d.empty:
+        fig = go.Figure(_city_label_trace)
+        fig.update_geos(**GEO_STYLE)
+        fig.update_layout(
+            margin=dict(t=0, b=0, l=0, r=0),
+            autosize=True,
+            paper_bgcolor="white",
+            uirevision="texas-map",
+            geo=dict(domain=dict(x=[0, 1], y=[0, 1])),
+        )
+        return fig
+
+    sample = d.sample(min(len(d), 2000), random_state=42)
+
+    listing_trace = go.Scattergeo(
+        lat=sample["latitude"],
+        lon=sample["longitude"],
+        mode="markers",
+        marker=dict(
+            color=sample[color_col],
+            colorscale="Plasma",
+            colorbar=dict(title=color_label, thickness=14),
+            size=5,
+            opacity=0.70,
+            line=dict(width=0),
+        ),
+        customdata=sample[["average_rate_per_night", "bedrooms_count", "city"]].values,
+        hovertemplate=(
+            "<b>%{customdata[2]}</b><br>"
+            "Nightly Price: $%{customdata[0]:,.0f}<br>"
+            "Bedrooms: %{customdata[1]:.0f}<extra></extra>"
+        ),
+        showlegend=False,
+        name="Listings",
     )
+
+    fig = go.Figure([listing_trace, _city_label_trace])
+    fig.update_geos(**GEO_STYLE)
     fig.update_layout(
-        map_style="open-street-map",
-        coloraxis_colorbar=dict(title=color_label, thickness=14),
         margin=dict(t=0, b=0, l=0, r=0),
+        autosize=True,
+        paper_bgcolor="white",
+        uirevision="texas-map",
+        geo=dict(domain=dict(x=[0, 1], y=[0, 1])),
     )
     return fig
 
