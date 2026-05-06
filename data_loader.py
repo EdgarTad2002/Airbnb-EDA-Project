@@ -7,13 +7,14 @@ _cache = {}
 def load_data():
     """
     Runs the full cleaning pipeline from the notebook (cells 5, 6, 9, 15, 22, 31)
-    and returns two cleaned DataFrames:
-        df_final  — used for overview, map, and trends pages
-        df_story  — df_final + price_per_bedroom, used for city intelligence page
+    and returns three cleaned DataFrames:
+        df_clean  — basic cleaning only, pre-IQR (matches notebook cell 11)
+        df_final  — df_clean with 4×IQR extreme outliers removed
+        df_story  — df_final + price_per_bedroom (matches notebook cell 32+)
     Results are cached after the first call so the CSV is only read once.
     """
     if "df_final" in _cache:
-        return _cache["df_final"], _cache["df_story"]
+        return _cache["df_clean"], _cache["df_final"], _cache["df_story"]
 
     # --- Cell 2: Load ---
     df = pd.read_csv("Airbnb_Texas_Rentals.csv")
@@ -35,6 +36,9 @@ def load_data():
     df["bedrooms_count"] = df["bedrooms_count"].replace("Studio", "0")
     df["bedrooms_count"] = pd.to_numeric(df["bedrooms_count"], errors="coerce")
     df.dropna(subset=["average_rate_per_night", "bedrooms_count"], inplace=True)
+
+    # --- Cell 11: Snapshot before outlier removal — matches notebook cell 11 ---
+    df_clean = df.copy()
 
     # --- Cell 15: Remove extreme outliers (4 × IQR rule) ---
     Q1 = df["average_rate_per_night"].quantile(0.25)
@@ -62,6 +66,7 @@ def load_data():
         subset=["price_per_bedroom"]
     )
 
+    _cache["df_clean"] = df_clean
     _cache["df_final"] = df_final
     _cache["df_story"] = df_story
-    return df_final, df_story
+    return df_clean, df_final, df_story

@@ -9,7 +9,7 @@ from data_loader import load_data
 
 dash.register_page(__name__, path="/", name="Overview", title="Market Overview")
 
-df_final, _ = load_data()
+df_clean, df_final, _ = load_data()
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 PRICE_MIN  = int(df_final["average_rate_per_night"].min())
@@ -66,15 +66,16 @@ layout = dbc.Container(
                             dcc.RangeSlider(
                                 id="overview-price-slider",
                                 min=PRICE_MIN,
-                                max=PRICE_P95,
+                                max=PRICE_MAX,
                                 step=1,
-                                value=[PRICE_MIN, PRICE_P95],
+                                value=[PRICE_MIN, PRICE_MAX],
                                 pushable=10,
                                 marks={
                                     PRICE_MIN: f"${PRICE_MIN}",
-                                    int(PRICE_P95 * 0.33): f"${int(PRICE_P95 * 0.33)}",
-                                    int(PRICE_P95 * 0.66): f"${int(PRICE_P95 * 0.66)}",
-                                    PRICE_P95: f"${PRICE_P95}",
+                                    # int(PRICE_P95 * 0.33): f"${int(PRICE_P95 * 0.33)}",
+                                    # int(PRICE_P95 * 0.66): f"${int(PRICE_P95 * 0.66)}",
+                                    # PRICE_P95: f"${PRICE_P95}",
+                                    PRICE_MAX: f"${PRICE_MAX}"
                                 },
                                 tooltip={"placement": "bottom", "always_visible": True},
                                 allowCross=False,
@@ -300,20 +301,12 @@ def update_histogram(price_range):
 
 @callback(
     Output("overview-cities-bar", "figure"),
-    Input("overview-price-slider",   "value"),
     Input("overview-n-cities-slider", "value"),
 )
-def update_cities_bar(price_range, n_cities):
-    # Notebook cell 11 — converted from seaborn barplot to px.bar
-    low, high = price_range[0], max(price_range[1], price_range[0] + 10)
-    filtered = df_final[
-        (df_final["average_rate_per_night"] >= low) &
-        (df_final["average_rate_per_night"] <= high)
-    ]
-    if filtered.empty:
-        return px.bar(title="No listings in this price range", template="plotly_white")
+def update_cities_bar(n_cities):
+    # Notebook cell 11 — uses df_clean (pre-IQR, no price filter) to match exactly
     top_n = (
-        filtered["city"]
+        df_clean["city"]
         .value_counts()
         .head(n_cities)
         .reset_index()
