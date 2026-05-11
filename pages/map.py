@@ -6,7 +6,7 @@ from dash import Input, Output, callback, dcc, html
 
 from data_loader import load_data
 
-dash.register_page(__name__, path="/map", name="Map", title="Listings Explorer")
+dash.register_page(__name__, path="/map", name="Listings", title="Listings Explorer")
 
 _, df_final, _ = load_data()
 

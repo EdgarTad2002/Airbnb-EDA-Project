@@ -15,7 +15,7 @@ navbar = dbc.NavbarSimple(
     children=[
         dbc.NavItem(dbc.NavLink("Overview",    href="/")),
         dbc.NavItem(dbc.NavLink("Cities",      href="/cities")),
-        dbc.NavItem(dbc.NavLink("Map",         href="/map")),
+        dbc.NavItem(dbc.NavLink("Listings",    href="/map")),
         dbc.NavItem(dbc.NavLink("Trends",      href="/trends")),
     ],
     brand="🏠 Texas Airbnb Insights",
