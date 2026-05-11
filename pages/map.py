@@ -1,49 +1,168 @@
 import dash
 import dash_bootstrap_components as dbc
+import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 from dash import Input, Output, callback, dcc, html
 
 from data_loader import load_data
 
-# Major Texas cities for the label overlay
-TX_CITIES = {
-    "Houston":        (29.760, -95.370),
-    "San Antonio":    (29.425, -98.494),
-    "Dallas":         (32.783, -96.800),
-    "Austin":         (30.267, -97.743),
-    "Fort Worth":     (32.755, -97.333),
-    "El Paso":        (31.761, -106.485),
-    "Corpus Christi": (27.801, -97.396),
-    "Lubbock":        (33.578, -101.856),
-    "Amarillo":       (35.221, -101.831),
-    "Waco":           (31.549, -97.147),
-    "Laredo":         (27.506, -99.507),
-    "Galveston":      (29.301, -94.797),
-}
-
-dash.register_page(__name__, path="/map", name="Map", title="Map Explorer")
+dash.register_page(__name__, path="/map", name="Map", title="Listings Explorer")
 
 _, df_final, _ = load_data()
 
-ALL_CITIES  = sorted(df_final["city"].unique())
-PRICE_MIN   = int(df_final["average_rate_per_night"].min())
-PRICE_MAX   = int(df_final["average_rate_per_night"].max())
-PRICE_P95   = int(df_final["average_rate_per_night"].quantile(0.95))
-BEDROOM_MAX = int(df_final["bedrooms_count"].max())
+ALL_CITIES   = sorted(df_final["city"].unique())
+PRICE_MIN    = int(df_final["average_rate_per_night"].min())
+PRICE_MAX    = int(df_final["average_rate_per_night"].max())
+PRICE_P95    = int(df_final["average_rate_per_night"].quantile(0.95))
+BEDROOM_MAX  = int(df_final["bedrooms_count"].max())
+
+# Treemap configuration ──────────────────────────────────────────────────────
+TOP_CITIES        = 10
+PRICE_TIER_BINS   = [-1, 75, 150, 250, float("inf")]
+PRICE_TIER_LABELS = ["Budget (<$75)", "Mid ($75–150)", "High ($150–250)", "Luxury ($250+)"]
+BEDROOM_ORDER     = ["Studio", "1 bd", "2 bd", "3 bd", "4+ bd"]
+
+
+def _bedroom_label(n: int) -> str:
+    n = int(n)
+    if n == 0:
+        return "Studio"
+    if n >= 4:
+        return "4+ bd"
+    return f"{n} bd"
+
+
+# Pre-tag price tier and bedrooms label ONCE — these don't depend on filters.
+# Both are ordered categoricals so sunburst slices come out in a stable order.
+df_final = df_final.copy()
+df_final["price_tier"] = pd.cut(
+    df_final["average_rate_per_night"],
+    bins=PRICE_TIER_BINS,
+    labels=PRICE_TIER_LABELS,
+    ordered=True,
+)
+df_final["bedrooms_label"] = pd.Categorical(
+    df_final["bedrooms_count"].apply(_bedroom_label),
+    categories=BEDROOM_ORDER,
+    ordered=True,
+)
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+def _empty_treemap(message: str = "No listings match these filters"):
+    fig = px.treemap(
+        names=[message],
+        parents=[""],
+        values=[1],
+    )
+    fig.update_traces(
+        marker=dict(colors=["#e9ecef"]),
+        textfont=dict(color="#6c757d", size=14),
+        hoverinfo="skip",
+    )
+    fig.update_layout(
+        margin=dict(t=10, b=10, l=10, r=10),
+        paper_bgcolor="white",
+        height=620,
+    )
+    return fig
+
+
+def _build_treemap(d: pd.DataFrame):
+    if d.empty:
+        return _empty_treemap()
+
+    # Keep only the top cities by listing count — otherwise the chart becomes
+    # a mosaic of tiny illegible rectangles.
+    top_city_names = d["city"].value_counts().head(TOP_CITIES).index
+    d_top = d[d["city"].isin(top_city_names)]
+    if d_top.empty:
+        return _empty_treemap()
+
+    fig = px.treemap(
+        d_top,
+        path=[px.Constant("All cities"), "city", "bedrooms_label", "price_tier"],
+        values=None,
+        color="average_rate_per_night",
+        color_continuous_scale="Plasma",
+        range_color=(PRICE_MIN, PRICE_P95),
+    )
+    fig.update_traces(
+        hovertemplate=(
+            "<b>%{label}</b><br>"
+            "Listings: %{value:,}<br>"
+            "Avg Price: $%{color:.0f}/night"
+            "<extra></extra>"
+        ),
+        textinfo="label+value",
+        textfont=dict(size=13, color="white", family="Inter, Arial, sans-serif"),
+        marker=dict(
+            line=dict(color="white", width=2),
+            cornerradius=4,
+        ),
+        root_color="white",
+        tiling=dict(packing="squarify", pad=2),
+    )
+    fig.update_layout(
+        margin=dict(t=30, b=10, l=10, r=100),
+        paper_bgcolor="white",
+        height=620,
+        uirevision="treemap",
+        coloraxis_colorbar=dict(
+            title=dict(text="Avg Price ($)", side="right"),
+            thickness=12,
+            len=0.7,
+            outlinewidth=0,
+            tickfont=dict(size=11, color="#495057"),
+        ),
+        font=dict(family="Inter, Arial, sans-serif"),
+    )
+    return fig
+
+
+def _top10_city_bar():
+    top10_cities = df_final["city"].value_counts().head(10).index.tolist()
+    avg_price = (
+        df_final[df_final["city"].isin(top10_cities)]
+        .groupby("city")["average_rate_per_night"]
+        .mean()
+        .sort_values(ascending=True)
+        .reset_index()
+    )
+    avg_price.columns = ["city", "avg_price"]
+    fig = px.bar(
+        avg_price,
+        x="avg_price",
+        y="city",
+        orientation="h",
+        color="avg_price",
+        color_continuous_scale="Blues",
+        labels={"avg_price": "Avg Nightly Price ($)", "city": ""},
+        template="plotly_white",
+        text_auto="$.0f",
+    )
+    fig.update_layout(
+        margin=dict(t=10, b=40, l=10, r=60),
+        coloraxis_showscale=False,
+        height=300,
+    )
+    fig.update_traces(textposition="outside")
+    return fig
+
+
+CITY_BAR_FIGURE = _top10_city_bar()
 
 
 # ── Layout ────────────────────────────────────────────────────────────────────
 layout = dbc.Container(
     [
-        # Page header
         dbc.Row(
             dbc.Col(
                 html.Div(
                     [
-                        html.H2("Map Explorer", className="fw-bold mb-0"),
+                        html.H2("Listings Explorer", className="fw-bold mb-0"),
                         html.P(
-                            "Browse Texas Airbnb listings geographically.",
+                            "How Texas Airbnb listings break down by city, bedroom count, and price tier.",
                             className="text-muted",
                         ),
                     ]
@@ -68,22 +187,7 @@ layout = dbc.Container(
                                     placeholder="All cities",
                                 ),
                             ],
-                            md=4,
-                        ),
-                        dbc.Col(
-                            [
-                                html.Label("Color Map By", className="fw-semibold small"),
-                                dcc.Dropdown(
-                                    id="map-color-dropdown",
-                                    options=[
-                                        {"label": "Nightly Price ($)", "value": "average_rate_per_night"},
-                                        {"label": "Bedrooms",          "value": "bedrooms_count"},
-                                    ],
-                                    value="average_rate_per_night",
-                                    clearable=False,
-                                ),
-                            ],
-                            md=3,
+                            md=5,
                         ),
                         dbc.Col(
                             [
@@ -101,9 +205,10 @@ layout = dbc.Container(
                                     },
                                     tooltip={"placement": "bottom", "always_visible": True},
                                     allowCross=False,
+                                    updatemode="mouseup",
                                 ),
                             ],
-                            md=3,
+                            md=4,
                             className="pt-1",
                         ),
                         dbc.Col(
@@ -117,9 +222,10 @@ layout = dbc.Container(
                                     value=BEDROOM_MAX,
                                     marks={0: "Studio", BEDROOM_MAX: str(BEDROOM_MAX)},
                                     tooltip={"placement": "bottom", "always_visible": True},
+                                    updatemode="mouseup",
                                 ),
                             ],
-                            md=2,
+                            md=3,
                             className="pt-1",
                         ),
                     ],
@@ -136,7 +242,7 @@ layout = dbc.Container(
                     dbc.Card(
                         dbc.CardBody(
                             [
-                                html.P("Listings on Map", className="text-muted small mb-1"),
+                                html.P("Listings Shown", className="text-muted small mb-1"),
                                 html.H4(id="map-kpi-count", className="fw-bold mb-0"),
                             ],
                             className="text-center",
@@ -188,26 +294,26 @@ layout = dbc.Container(
             className="mb-4 g-3",
         ),
 
-        # ── Map ───────────────────────────────────────────────────────────────
+        # ── Sunburst ─────────────────────────────────────────────────────────
         dbc.Row(
             dbc.Col(
                 dbc.Card(
                     dbc.CardBody(
                         [
-                            html.H5("Listing Locations", className="card-title fw-semibold"),
+                            html.H5(
+                                "Listings Treemap — City → Bedrooms → Price Tier",
+                                className="card-title fw-semibold",
+                            ),
                             html.P(
-                                "Each dot is an Airbnb listing. Hover for details. "
-                                "Pan and zoom to explore.",
+                                "Top 10 cities, broken down by bedroom count and then by price tier. "
+                                "Box size = number of listings, color = avg nightly price. "
+                                "Click any box to zoom in; use the breadcrumb at the top to zoom out.",
                                 className="text-muted small",
                             ),
-                            dcc.Loading(
-                                dcc.Graph(
-                                    id="map-scatter",
-                                    config={"displayModeBar": True, "scrollZoom": True},
-                                    style={"height": "500px", "width": "100%"},
-                                ),
-                                type="circle",
-                                color="#2563eb",
+                            dcc.Graph(
+                                id="map-scatter",
+                                config={"displayModeBar": False},
+                                style={"height": "620px", "width": "100%"},
                             ),
                         ]
                     ),
@@ -217,18 +323,25 @@ layout = dbc.Container(
             className="mb-4",
         ),
 
-        # ── City price heatmap (bar) ──────────────────────────────────────────
+        # ── City price bar (static) ──────────────────────────────────────────
         dbc.Row(
             dbc.Col(
                 dbc.Card(
                     dbc.CardBody(
                         [
-                            html.H5("Avg Price by City — Top 10 by Listing Count", className="card-title fw-semibold"),
+                            html.H5(
+                                "Avg Price by City — Top 10 by Listing Count",
+                                className="card-title fw-semibold",
+                            ),
                             html.P(
                                 "Fixed top 10 cities by number of listings and their average nightly price.",
                                 className="text-muted small",
                             ),
-                            dcc.Graph(id="map-city-bar", config={"displayModeBar": False}),
+                            dcc.Graph(
+                                id="map-city-bar",
+                                figure=CITY_BAR_FIGURE,
+                                config={"displayModeBar": False},
+                            ),
                         ]
                     ),
                     className="shadow-sm",
@@ -259,149 +372,21 @@ def _filter(price_range, bedroom_max, city_list):
     Output("map-kpi-median", "children"),
     Output("map-kpi-cities", "children"),
     Output("map-kpi-avg",    "children"),
-    Input("map-price-slider",    "value"),
-    Input("map-bedroom-slider",  "value"),
-    Input("map-city-dropdown",   "value"),
-    Input("map-color-dropdown",  "value"),
+    Output("map-scatter",    "figure"),
+    Input("map-price-slider",   "value"),
+    Input("map-bedroom-slider", "value"),
+    Input("map-city-dropdown",  "value"),
 )
-def update_kpis(price_range, bedroom_max, city_list, _color):
+def update_treemap_and_kpis(price_range, bedroom_max, city_list):
     d = _filter(price_range, bedroom_max, city_list)
+
     if d.empty:
-        return "0", "N/A", "0", "N/A"
+        return "0", "N/A", "0", "N/A", _empty_treemap()
+
     return (
         f"{len(d):,}",
         f"${d['average_rate_per_night'].median():.0f}",
         str(d["city"].nunique()),
         f"${d['average_rate_per_night'].mean():.0f}",
+        _build_treemap(d),
     )
-
-
-GEO_STYLE = dict(
-    visible=True,
-    resolution=50,
-    projection_type="mercator",
-    showcountries=True,   countrycolor="#adb5bd",
-    showcoastlines=True,  coastlinecolor="#adb5bd",
-    showland=True,        landcolor="#f1f3f5",
-    showocean=True,       oceancolor="#cfe2ff",
-    showlakes=True,       lakecolor="#cfe2ff",
-    showrivers=True,      rivercolor="#cfe2ff",
-    showsubunits=True,    subunitcolor="#ced4da",
-    subunitwidth=1,
-    lataxis=dict(range=[25.5, 36.8]),
-    lonaxis=dict(range=[-107.5, -93.0]),
-)
-
-_city_label_trace = go.Scattergeo(
-    lat=[v[0] for v in TX_CITIES.values()],
-    lon=[v[1] for v in TX_CITIES.values()],
-    text=list(TX_CITIES.keys()),
-    mode="markers+text",
-    textposition="top center",
-    textfont=dict(size=10, color="#343a40", family="Arial"),
-    marker=dict(size=5, color="#495057", symbol="circle"),
-    hoverinfo="skip",
-    showlegend=False,
-    name="",
-)
-
-
-@callback(
-    Output("map-scatter", "figure"),
-    Input("map-price-slider",   "value"),
-    Input("map-bedroom-slider", "value"),
-    Input("map-city-dropdown",  "value"),
-    Input("map-color-dropdown", "value"),
-)
-def update_map(price_range, bedroom_max, city_list, color_col):
-    d = _filter(price_range, bedroom_max, city_list)
-
-    color_label = "Nightly Price ($)" if color_col == "average_rate_per_night" else "Bedrooms"
-
-    if d.empty:
-        fig = go.Figure(_city_label_trace)
-        fig.update_geos(**GEO_STYLE)
-        fig.update_layout(
-            margin=dict(t=0, b=0, l=0, r=0),
-            autosize=True,
-            paper_bgcolor="white",
-            uirevision="texas-map",
-            geo=dict(domain=dict(x=[0, 1], y=[0, 1])),
-        )
-        return fig
-
-    sample = d.sample(min(len(d), 2000), random_state=42)
-
-    listing_trace = go.Scattergeo(
-        lat=sample["latitude"],
-        lon=sample["longitude"],
-        mode="markers",
-        marker=dict(
-            color=sample[color_col],
-            colorscale="Plasma",
-            colorbar=dict(title=color_label, thickness=14),
-            size=5,
-            opacity=0.70,
-            line=dict(width=0),
-        ),
-        customdata=sample[["average_rate_per_night", "bedrooms_count", "city"]].values,
-        hovertemplate=(
-            "<b>%{customdata[2]}</b><br>"
-            "Nightly Price: $%{customdata[0]:,.0f}<br>"
-            "Bedrooms: %{customdata[1]:.0f}<extra></extra>"
-        ),
-        showlegend=False,
-        name="Listings",
-    )
-
-    fig = go.Figure([listing_trace, _city_label_trace])
-    fig.update_geos(**GEO_STYLE)
-    fig.update_layout(
-        margin=dict(t=0, b=0, l=0, r=0),
-        autosize=True,
-        paper_bgcolor="white",
-        uirevision="texas-map",
-        geo=dict(domain=dict(x=[0, 1], y=[0, 1])),
-    )
-    return fig
-
-
-def _top10_city_bar():
-    top10_cities = df_final["city"].value_counts().head(10).index.tolist()
-    avg_price = (
-        df_final[df_final["city"].isin(top10_cities)]
-        .groupby("city")["average_rate_per_night"]
-        .mean()
-        .sort_values(ascending=True)
-        .reset_index()
-    )
-    avg_price.columns = ["city", "avg_price"]
-    fig = px.bar(
-        avg_price,
-        x="avg_price",
-        y="city",
-        orientation="h",
-        color="avg_price",
-        color_continuous_scale="Blues",
-        labels={"avg_price": "Avg Nightly Price ($)", "city": ""},
-        template="plotly_white",
-        text_auto="$.0f",
-    )
-    fig.update_layout(
-        margin=dict(t=10, b=40, l=10, r=60),
-        coloraxis_showscale=False,
-        height=300,
-    )
-    fig.update_traces(textposition="outside")
-    return fig
-
-
-_CITY_BAR_FIGURE = _top10_city_bar()
-
-
-@callback(
-    Output("map-city-bar", "figure"),
-    Input("map-price-slider", "value"),
-)
-def update_city_bar(_price):
-    return _CITY_BAR_FIGURE
